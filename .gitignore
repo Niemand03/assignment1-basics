@@ -127,6 +127,7 @@ venv/
 ENV/
 env.bak/
 venv.bak/
+.vscode/settings.json
 
 # Spyder project settings
 .spyderproject
@@ -161,3 +162,5 @@ cython_debug/
 
 .ruff_cache/
 *.zip
+
+.vscode/
