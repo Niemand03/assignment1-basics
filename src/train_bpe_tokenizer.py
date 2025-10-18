@@ -61,7 +61,31 @@ def _process_chunk(input_path: str, start: int, end: int, pat_str: str, special_
     
     return word_freqs
 
+def _serial_pre_tokenization(input_path: str, special_tokens: list[str]) -> collections.defaultdict[tuple[int, ...], int]:
+    word_freqs = collections.defaultdict(int)
+
+    with open(input_path, 'r', encoding='utf-8') as f:
+        text = f.read()
+
+    if special_tokens:
+        special_pattern = "|".join(re.escape(s) for s in special_tokens)
+        text_chunks = re.split(f'({special_pattern})', text)
+    else:
+        text_chunks = [text]
+
+    pat = re.compile(PAT)
+    for chunk in text_chunks:
+        if chunk in special_tokens:
+            continue
+        for match in pat.finditer(chunk):
+            word_bytes = match.group(0).encode("utf-8")
+            word_freqs[tuple(word_bytes)] += 1
+    
+    return word_freqs
+
 def _parallel_pre_tokenization(input_path: str, special_tokens: list[str], num_processes: int) -> collections.defaultdict[tuple[int, ...], int]:
+    print(f"using {num_processes} processes for parallel pre-tokenization")
+
     split_token_bytes = special_tokens[0].encode('utf-8')
 
     with open(input_path, 'rb') as f:
@@ -75,11 +99,11 @@ def _parallel_pre_tokenization(input_path: str, special_tokens: list[str], num_p
         end_byte = boundaries[i+1]
         tasks.append((input_path, start_byte, end_byte, PAT, special_tokens))
 
-    with multiprocessing.Pool(processes=min(num_processes, num_actual_chunks)) as pool: # 确保启动的并行工作进程数量不会超过实际可以并行处理的任务数量 避免创建无用的进程浪费系统资源
-        list_of_freqs = list(tqdm(pool.starmap(_process_chunk, tasks), total=len(tasks), desc="Pre-tokenizing chunks"))
+    with multiprocessing.Pool(processes=min(num_processes, num_actual_chunks)) as pool:
+        list_of_freqs = list(pool.starmap(_process_chunk, tasks))
 
     total_word_freqs = collections.defaultdict(int)
-    for freqs_dict in tqdm(list_of_freqs, desc="Aggregating frequencies"):
+    for freqs_dict in list_of_freqs:
         for word, freq in freqs_dict.items():
             total_word_freqs[word] += freq
 
@@ -88,44 +112,24 @@ def _parallel_pre_tokenization(input_path: str, special_tokens: list[str], num_p
 def train_bpe_tokenizer_naive(input_path: str, vocab_size: int, special_tokens: list[str], num_processes: int = 1) -> tuple[dict[int, bytes], list[tuple[bytes, bytes]]]:
     assert vocab_size >= 256 + len(special_tokens)
     
-    vocab = {i: bytes([(i)]) for i in range(256)} # vocabulary initialization
+    vocab = {i: bytes([(i)]) for i in range(256)}
     next_id = 256
     
-    # --- add special tokens to vocabulary ---
     for s in special_tokens:
         vocab[next_id] = s.encode("utf-8")
         next_id += 1
 
-    # --- pre-tokenization ---
-    if num_processes > 1: # 并行路径
+    if num_processes > 1:
         word_freqs = _parallel_pre_tokenization(input_path, special_tokens, num_processes)
-    else: # 串行路径
-        word_freqs = collections.defaultdict(int)
-        with open(input_path, 'r', encoding='utf-8') as f:
-            text = f.read()
-
-        if special_tokens:
-            special_pattern = "|".join(re.escape(s) for s in special_tokens)
-            text_chunks = re.split(f'({special_pattern})', text)
-        else:
-            text_chunks = [text]
-
-        pat = re.compile(PAT)
-        for chunk in text_chunks:
-            if chunk in special_tokens:
-                continue
-            for match in pat.finditer(chunk):
-                word_bytes = match.group(0).encode("utf-8")
-                word_freqs[tuple(word_bytes)] += 1
+    else:
+        word_freqs = _serial_pre_tokenization(input_path, special_tokens)
                 
-    # --- bpe merges ---
     num_bpe_merges_max = vocab_size - len(vocab)
     merges = []
 
-    for i in tqdm(range(num_bpe_merges_max), desc="Training BPE Tokenizer (naive)"):
+    for i in tqdm(range(num_bpe_merges_max), desc="training bpe tokenizer (naive)"):
         pair_freqs = collections.defaultdict(int)
 
-        # --- compute pair frequencys ---
         for word_as_ids, freq in word_freqs.items():
             for i in range(len(word_as_ids) - 1):
                 pair = (word_as_ids[i], word_as_ids[i+1])
@@ -134,15 +138,15 @@ def train_bpe_tokenizer_naive(input_path: str, vocab_size: int, special_tokens: 
         if not pair_freqs:
             break
 
-        # --- tie_breaking ---
         best_pair = max(pair_freqs, key=lambda p: (pair_freqs[p], vocab[p[0]], vocab[p[1]]))
         p1, p2 = best_pair
 
-        # --- update word frequencys ---
         word_freqs_updated = collections.defaultdict(int)
+
         for word_as_ids, freq in word_freqs.items():
             word_as_ids_updated = []
             i = 0
+
             while i < len(word_as_ids):
                 if i < len(word_as_ids) - 1 and word_as_ids[i] == p1 and word_as_ids[i+1] == p2:
                     word_as_ids_updated.append(next_id)
@@ -150,49 +154,31 @@ def train_bpe_tokenizer_naive(input_path: str, vocab_size: int, special_tokens: 
                 else:
                     word_as_ids_updated.append(word_as_ids[i])
                     i += 1
-            word_freqs_updated[tuple(word_as_ids_updated)] += freq
+
+            word_freqs_updated[tuple(word_as_ids_updated)] += freq 
         word_freqs = word_freqs_updated
 
-        merges.append((vocab[p1], vocab[p2])) # record merge
-        vocab[next_id]  = vocab[p1] + vocab[p2] # append new token to vocabulary
-        next_id += 1 # update new token id
+        merges.append((vocab[p1], vocab[p2]))
+        vocab[next_id]  = vocab[p1] + vocab[p2]
+        next_id += 1
 
     return vocab, merges
 
 def train_bpe_tokenizer_optimized(input_path: str, vocab_size: int, special_tokens: list[str], num_processes: int = 1) -> tuple[dict[int, bytes], list[tuple[bytes, bytes]]]:
     assert vocab_size >= 256 + len(special_tokens)
     
-    vocab = {i: bytes([(i)]) for i in range(256)} # vocabulary initialization
+    vocab = {i: bytes([(i)]) for i in range(256)}
     next_id = 256
     
-    # --- add special tokens to vocabulary ---
     for s in special_tokens:
         vocab[next_id] = s.encode("utf-8")
         next_id += 1
 
-    # --- pre-tokenization ---
-    if num_processes > 1: # 并行路径
+    if num_processes > 1:
         word_freqs = _parallel_pre_tokenization(input_path, special_tokens, num_processes)
-    else: # 串行路径
-        word_freqs = collections.defaultdict(int)
-        with open(input_path, 'r', encoding='utf-8') as f:
-            text = f.read()
+    else:
+        word_freqs = _serial_pre_tokenization(input_path, special_tokens)
 
-        if special_tokens:
-            special_pattern = "|".join(re.escape(s) for s in special_tokens)
-            text_chunks = re.split(f'({special_pattern})', text)
-        else:
-            text_chunks = [text]
-
-        pat = re.compile(PAT)
-        for chunk in text_chunks:
-            if chunk in special_tokens:
-                continue
-            for match in pat.finditer(chunk):
-                word_bytes = match.group(0).encode("utf-8")
-                word_freqs[tuple(word_bytes)] += 1
-
-    # --- bpe merges ---
     pair_freqs = collections.defaultdict(int)
     pair_to_words_map = collections.defaultdict(set)
 
@@ -205,15 +191,15 @@ def train_bpe_tokenizer_optimized(input_path: str, vocab_size: int, special_toke
     num_bpe_merges_max = vocab_size - len(vocab)
     merges = []
 
-    for i in tqdm(range(num_bpe_merges_max), desc="Training BPE Tokenizer (optimized)"):
+    for i in tqdm(range(num_bpe_merges_max), desc="training bpe tokenizer (optimized)"):
         if not pair_freqs:
             break
 
         best_pair = max(pair_freqs.keys(), key=lambda p: (pair_freqs[p], vocab[p[0]], vocab[p[1]]))
         p1, p2 = best_pair
 
-        new_id = next_id
         merges.append((vocab[p1], vocab[p2]))
+        new_id = next_id
         vocab[new_id] = vocab[p1] + vocab[p2]
         next_id += 1
 
@@ -223,33 +209,33 @@ def train_bpe_tokenizer_optimized(input_path: str, vocab_size: int, special_toke
             freq = word_freqs[word]
             del word_freqs[word]
 
-            # 减去旧影响 (Undo)
-            for j in range(len(word) - 1):
-                pair = (word[j], word[j+1])
+            for i in range(len(word) - 1):
+                pair = (word[i], word[i+1])
                 pair_freqs[pair] -= freq
-                pair_to_words_map[pair].discard(word) # .discard instead of .remove
+                pair_to_words_map[pair].discard(word) # .discard() instead of .remove()
 
                 if pair_freqs[pair] == 0:
                     del pair_freqs[pair]
                 if not pair_to_words_map[pair]:
                     del pair_to_words_map[pair]
 
-            # 创建新单词 (Modify)
             new_word = []
-            k = 0
-            while k < len(word):
-                if k < len(word) - 1 and word[k] == p1 and word[k+1] == p2:
+            i = 0
+
+            while i < len(word):
+                if i < len(word) - 1 and word[i] == p1 and word[i+1] == p2:
                     new_word.append(new_id)
-                    k += 2
+                    i += 2
                 else:
-                    new_word.append(word[k])
-                    k += 1
+                    new_word.append(word[i])
+                    i += 1
+
             new_word = tuple(new_word)
 
-            # 增加新影响 (Apply)
             word_freqs[new_word] = freq
-            for j in range(len(new_word) - 1):
-                pair = (new_word[j], new_word[j+1])
+
+            for i in range(len(new_word) - 1):
+                pair = (new_word[i], new_word[i+1])
                 pair_freqs[pair] += freq
                 pair_to_words_map[pair].add(new_word)
         
@@ -267,7 +253,6 @@ if __name__ == "__main__":
 
     if parallel_pre_tokenization:
         num_processes = os.cpu_count() // 2
-        print(f"Using {num_processes} processes for parallel pre-tokenization.")
     else:
         num_processes = 1
     
@@ -275,16 +260,16 @@ if __name__ == "__main__":
     vocab_naive, merges_naive = train_bpe_tokenizer_naive(file_path, vocab_size, special_tokens, num_processes)
     end_time_naive = time.time()
     duration_naive = end_time_naive - start_time_naive
-    print(f"Naive version took: {duration_naive:.2f} seconds")
+    print(f"Naive version took: {duration_naive:.2f} seconds\n")
 
     start_time_optimized = time.time()
     vocab_optimized, merges_optimized = train_bpe_tokenizer_optimized(file_path, vocab_size, special_tokens, num_processes)
     end_time_optimized = time.time()
     duration_optimized = end_time_optimized - start_time_optimized
-    print(f"Optimized version took: {duration_optimized:.2f} seconds")
+    print(f"Optimized version took: {duration_optimized:.2f} seconds\n")
     
     if vocab_naive == vocab_optimized:
-        print("Vocabularies are identical.\n")
+        print("Vocabularies are identical.")
     if merges_naive == merges_optimized:
         print("Merges are identical.\n")
 
