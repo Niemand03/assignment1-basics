@@ -7,6 +7,25 @@ import torch
 from torch import Tensor
 import pickle
 
+import multiprocessing
+import sys
+
+@pytest.fixture(scope="session", autouse=True)
+def set_multiprocessing_start_method_for_tests():
+    """
+    Set the multiprocessing start method to 'spawn' for the entire test session.
+    
+    This is necessary on non-Windows systems to avoid 'fork()' in a multi-threaded
+    context (like pytest), which can lead to deadlocks and DeprecationWarnings.
+    
+    The session-scoped, autouse fixture ensures this is set exactly once
+    before any tests that might use multiprocessing are run.
+    """
+    if sys.platform != "win32":
+        # Check if the context has already been set (e.g., by another plugin)
+        # and only set it if it's not. This avoids errors in more complex setups.
+        if multiprocessing.get_start_method(allow_none=True) is None:
+            multiprocessing.set_start_method("spawn")
 
 class DEFAULT:
     pass

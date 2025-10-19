@@ -1,9 +1,8 @@
 import regex as re
 from collections.abc import Iterable, Iterator
 import base64
-from train_bpe_tokenizer import train_bpe_tokenizer_optimized
+from .train_bpe_tokenizer import train_bpe_tokenizer_optimized
 from pathlib import Path
-import os
 
 PAT = r"""'(?:[sdmt]|ll|ve|re)| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+"""
 
@@ -24,7 +23,8 @@ class BPE_Tokenizer:
         self.special_tokens: dict[str, int] = {}
         self.special_tokens_pat: re.Pattern | None = None
         
-        if special_tokens:  
+        if special_tokens:
+            sorted_special_tokens = sorted(special_tokens, key=len, reverse=True)
             for token_str in special_tokens:
                 token_bytes = token_str.encode("utf-8")
                 if token_bytes not in self.byte_to_id:
@@ -33,7 +33,7 @@ class BPE_Tokenizer:
                     self.byte_to_id[token_bytes] = new_id
                 self.special_tokens[token_str] = self.byte_to_id[token_bytes]
 
-            escaped_tokens = [re.escape(s) for s in special_tokens]
+            escaped_tokens = [re.escape(s) for s in sorted_special_tokens]
             self.special_tokens_pat = re.compile(f"({ '|'.join(escaped_tokens) })")
 
     def _get_pairs(self, ids: list[int]) -> set[tuple[int, int]]:
@@ -46,7 +46,7 @@ class BPE_Tokenizer:
         if not word_bytes:
             return []
         
-        ids = list(word_bytes)
+        ids = [self.byte_to_id[bytes([b])] for b in word_bytes]
 
         while len(ids) > 1:
             pairs = self._get_pairs(ids)
