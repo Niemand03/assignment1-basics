@@ -164,3 +164,5 @@ cython_debug/
 *.zip
 
 .vscode/
+
+bpe_tokenizer_files/

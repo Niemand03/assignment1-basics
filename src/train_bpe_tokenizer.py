@@ -43,7 +43,7 @@ def _process_chunk(input_path: str, start: int, end: int, pat_str: str, special_
         f.seek(start)
         chunk_bytes = f.read(end - start)
 
-    text = chunk_bytes.decode('utf-8')
+    text = chunk_bytes.decode("utf-8")
 
     if special_tokens:
         special_pattern = "|".join(re.escape(s) for s in special_tokens)
@@ -84,7 +84,7 @@ def _serial_pre_tokenization(input_path: str, special_tokens: list[str]) -> coll
     return word_freqs
 
 def _parallel_pre_tokenization(input_path: str, special_tokens: list[str], num_processes: int) -> collections.defaultdict[tuple[int, ...], int]:
-    print(f"using {num_processes} processes for parallel pre-tokenization")
+    print(f"\n😍 - using {num_processes} processes for parallel pre-tokenization")
 
     split_token_bytes = special_tokens[0].encode('utf-8')
 

@@ -7,7 +7,7 @@ sys.path.append(str(project_root))
 from src.train_bpe_tokenizer import train_bpe_tokenizer_naive
 
 if __name__ == "__main__":
-    project_root = Path(__file__).resolve().parent.parent
+    """ project_root = Path(__file__).resolve().parent.parent
     file_path = project_root / 'tests' / 'fixtures' / 'tinystories_sample_5M.txt'
 
     # --- 场景 1: 1个特殊Token, 10次合并 ---
@@ -51,4 +51,7 @@ if __name__ == "__main__":
     for i in range(256, vocab_size_1):
         token1_str = f"{vocab1.get(i, b'N/A')}"
         token2_str = f"{vocab2.get(i, b'N/A')}"
-        print(f"{i:<5} | {token1_str:<25} | {token2_str:<25}")
+        print(f"{i:<5} | {token1_str:<25} | {token2_str:<25}") """
+    
+    chunks = ["hello world, ", "test"]
+    print(chunks[:-1])
